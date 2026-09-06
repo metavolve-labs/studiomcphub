@@ -33,6 +33,12 @@ gcloud run deploy "${SERVICE_NAME}" \
     --set-env-vars="GCP_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},FIRESTORE_DATABASE=golden-codex-database,DATA_PORTAL_URL=https://data-portal-172867820131.us-west1.run.app,TOOL_PROFILE=${TOOL_PROFILE:-directory}" \
     --set-secrets="STRIPE_SECRET_KEY=stripe_secret_api:latest,ADMIN_SECRET=ADMIN_SECRET:latest,JWT_SECRET=JWT_SECRET:latest,SECRET_KEY=SECRET_KEY:latest"
 
+# A prior --to-revisions pin leaves new revisions at 0% traffic.
+gcloud run services update-traffic "${SERVICE_NAME}" \
+    --region="${REGION}" \
+    --project="${PROJECT_ID}" \
+    --to-latest
+
 # Get URL
 echo "[3/3] Getting service URL..."
 URL=$(gcloud run services describe "${SERVICE_NAME}" \

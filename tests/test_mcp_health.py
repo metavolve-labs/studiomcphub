@@ -49,7 +49,7 @@ class McpHealthCheckTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True)[:400])
         self.assertEqual(r.get_json().get("result"), {})
 
-    def test_tools_call_without_session_still_400(self):
+    def test_tools_call_without_session_is_not_400(self):
         r = self.c.post(
             "/mcp",
             data=json.dumps(
@@ -57,12 +57,34 @@ class McpHealthCheckTests(unittest.TestCase):
                     "jsonrpc": "2.0",
                     "id": 3,
                     "method": "tools/call",
-                    "params": {"name": "search_artworks", "arguments": {"query": "x"}},
+                    "params": {
+                        "name": "compliance_manifest",
+                        "arguments": {},
+                    },
                 }
             ),
             content_type="application/json",
         )
-        self.assertEqual(r.status_code, 400)
+        self.assertNotEqual(r.status_code, 400, r.get_data(as_text=True)[:400])
+        self.assertIn(r.status_code, (200, 402))
+
+    def test_paid_tools_call_without_payment_is_402(self):
+        r = self.c.post(
+            "/mcp",
+            data=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "upscale_image",
+                        "arguments": {"image": "e30="},
+                    },
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 402, r.get_data(as_text=True)[:400])
 
     def test_oauth_protected_resource_mcp_is_200(self):
         r = self.c.get("/.well-known/oauth-protected-resource/mcp")

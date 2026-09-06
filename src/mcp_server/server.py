@@ -87,8 +87,20 @@ if _HAS_LIMITER:
 else:
     limiter = None
 
-# MCP session store: session_id -> (server, transport)
-_mcp_sessions: dict[str, tuple] = {}
+# MCP session ids are minted for the Streamable HTTP spec. The Server
+# object is process-local: gunicorn has 2 workers and Cloud Run has no
+# session affinity, so a follow-up must not require the initialize worker.
+_mcp_sessions: dict[str, object] = {}
+_worker_server = None
+
+
+def _get_mcp_server():
+    """One FastMCP Server per worker. Tool handlers are stateless; payment
+    is read from the Flask request, not from this object."""
+    global _worker_server
+    if _worker_server is None:
+        _worker_server = create_mcp_server(check_payment)
+    return _worker_server
 
 # Register admin panel
 app.register_blueprint(admin_bp)
@@ -442,10 +454,11 @@ def mcp_endpoint():
         except json.JSONDecodeError:
             return jsonify({"error": "Invalid JSON"}), 400
 
-        # Initialize: create new session
+        # Initialize: mint a session id. Do not bind handlers to this
+        # worker — tools/list and tools/call use the process singleton.
         if msg.get("method") == "initialize":
             sid = str(uuid.uuid4())
-            server = create_mcp_server(check_payment)
+            server = _get_mcp_server()
             _mcp_sessions[sid] = server
 
             # Return MCP initialize response with session ID
@@ -483,10 +496,7 @@ def mcp_endpoint():
             return jsonify({"jsonrpc": "2.0", "id": msg.get("id"), "result": {}})
 
         if msg.get("method") == "tools/list":
-            if session_id and session_id in _mcp_sessions:
-                server = _mcp_sessions[session_id]
-            else:
-                server = create_mcp_server(check_payment)
+            server = _get_mcp_server()
             handler = server.request_handlers.get(ListToolsRequest)
             loop = asyncio.new_event_loop()
             try:
@@ -507,14 +517,10 @@ def mcp_endpoint():
                 headers={"Mcp-Session-Id": session_id} if session_id else {},
             )
 
-        # tools/call still needs a live session on this worker.
-        if not session_id or session_id not in _mcp_sessions:
-            return jsonify({"error": "Invalid or missing Mcp-Session-Id"}), 400
-
-        server = _mcp_sessions[session_id]
-
-        # tools/call
+        # tools/call: same worker-hop rule as tools/list. Payment still
+        # gates via check_payment on this request (x402 / Stripe / GCX).
         if msg.get("method") == "tools/call":
+            server = _get_mcp_server()
             call_params = msg.get("params", {})
             tool_name = call_params.get("name", "")
             arguments = call_params.get("arguments", {})
@@ -544,7 +550,7 @@ def mcp_endpoint():
                 }),
                 status=200,
                 content_type="application/json",
-                headers={"Mcp-Session-Id": session_id},
+                headers={"Mcp-Session-Id": session_id} if session_id else {},
             )
 
         return jsonify({
