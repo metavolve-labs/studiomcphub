@@ -56,17 +56,31 @@ def _get_issuer() -> str:
 # Discovery endpoints
 # ---------------------------------------------------------------------------
 
-@oauth_bp.route("/.well-known/oauth-protected-resource")
-def protected_resource_metadata():
-    """RFC 9728 — Protected Resource Metadata."""
+def _protected_resource_body(resource: str) -> dict:
     issuer = _get_issuer()
-    return jsonify({
-        "resource": issuer,
+    return {
+        "resource": resource,
         "authorization_servers": [issuer],
         "scopes_supported": SCOPES_SUPPORTED,
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{issuer}/llms.txt",
-    })
+    }
+
+
+@oauth_bp.route("/.well-known/oauth-protected-resource")
+def protected_resource_metadata():
+    """RFC 9728 — Protected Resource Metadata."""
+    return jsonify(_protected_resource_body(_get_issuer()))
+
+
+@oauth_bp.route("/.well-known/oauth-protected-resource/mcp")
+def protected_resource_metadata_mcp():
+    """Path-appended RFC 9728 metadata for the /mcp resource.
+
+    MCP clients (Glama health checks included) fetch this after seeing
+    OAuth advertised. A 405 here looks like a dead connector.
+    """
+    return jsonify(_protected_resource_body(f"{_get_issuer()}/mcp"))
 
 
 @oauth_bp.route("/.well-known/oauth-authorization-server")

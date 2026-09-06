@@ -469,18 +469,24 @@ def mcp_endpoint():
                 headers={"Mcp-Session-Id": sid},
             )
 
-        # All other methods require existing session
-        if not session_id or session_id not in _mcp_sessions:
-            return jsonify({"error": "Invalid or missing Mcp-Session-Id"}), 400
-
-        server = _mcp_sessions[session_id]
-
-        # Handle notifications (no id field) — just acknowledge
+        # Notifications have no id. ACK even if initialize landed on
+        # another gunicorn worker (sessions are in-process only).
         if "id" not in msg:
             return Response("", status=202)
 
-        # tools/list
+        # tools/list and ping are stateless. Directory health checks
+        # (Glama hourly, Smithery, Inspector) initialize then list tools.
+        # Two gunicorn workers + no Cloud Run session affinity means the
+        # follow-up often hits a process that never saw initialize, which
+        # used to 400 "Invalid or missing Mcp-Session-Id".
+        if msg.get("method") == "ping":
+            return jsonify({"jsonrpc": "2.0", "id": msg.get("id"), "result": {}})
+
         if msg.get("method") == "tools/list":
+            if session_id and session_id in _mcp_sessions:
+                server = _mcp_sessions[session_id]
+            else:
+                server = create_mcp_server(check_payment)
             handler = server.request_handlers.get(ListToolsRequest)
             loop = asyncio.new_event_loop()
             try:
@@ -498,8 +504,14 @@ def mcp_endpoint():
                 }),
                 status=200,
                 content_type="application/json",
-                headers={"Mcp-Session-Id": session_id},
+                headers={"Mcp-Session-Id": session_id} if session_id else {},
             )
+
+        # tools/call still needs a live session on this worker.
+        if not session_id or session_id not in _mcp_sessions:
+            return jsonify({"error": "Invalid or missing Mcp-Session-Id"}), 400
+
+        server = _mcp_sessions[session_id]
 
         # tools/call
         if msg.get("method") == "tools/call":
