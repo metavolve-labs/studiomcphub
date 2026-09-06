@@ -2,8 +2,9 @@
 # Python 3.11+
 
 # MCP Server Framework
-mcp[cli]>=1.3.0
-fastmcp>=2.0.0
+# mcp 2.x dropped Server.list_tools (Cloud Run 00064 500). Stay on 1.x.
+mcp[cli]>=1.3.0,<2
+fastmcp>=2.0.0,<3
 
 # Web Framework
 flask>=3.0.0
