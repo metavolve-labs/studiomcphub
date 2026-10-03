@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-blue)](https://studiomcphub.com/.well-known/mcp.json)
 [![Glama](https://glama.ai/mcp/servers/badge)](https://glama.ai/mcp/servers/@codex-curator/studiomcphub)
+[![StudioMCPHub on AI Agents Listing](https://aiagentslisting.com/studiomcphub/badge.svg?claim=8513e429a7c000a605d965609c9d8ab6)](https://aiagentslisting.com/mcp/studiomcphub)
 
 StudioMCPHub is a production MCP server offering 32 tools (18 free): image generation, upscaling, background removal, product mockups, CMYK conversion, print-ready PDF, SVG vectorization, invisible watermarking, AI metadata enrichment, provenance registration, permanent Arweave storage, NFT minting, and access to 53,000+ museum artworks from Alexandria Aeternum. Agents pay per call with x402 USDC on Base L2 — no API keys, no accounts, no sign-up.
 
