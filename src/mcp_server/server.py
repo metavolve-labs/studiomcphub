@@ -540,6 +540,12 @@ def mcp_endpoint():
                     method="tools/call",
                     params=CallToolRequestParams(name=tool_name, arguments=arguments),
                 )))
+            except Exception:
+                # a tool that RAISES (rather than returning isError) must still give a Stripe payer their call back
+                if price and price.gcx_credits > 0 and payment:
+                    from ..payment.settlement import release_after_failure
+                    release_after_failure(payment[0], payment[1])
+                raise
             finally:
                 loop.close()
 

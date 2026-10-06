@@ -242,6 +242,42 @@ class WiringTests(unittest.TestCase):
         self.rest({"X-PAYMENT": "GOODPERMIT"})
         self.assertEqual(self.settled, [], "a failed tool collects nothing")
 
+    def mcp(self, headers, isError=False, raise_exc=None):
+        async def handler(req):
+            if raise_exc:
+                raise raise_exc
+            return CallToolResult(content=[TextContent(type="text", text="x")], isError=isError)
+        self._server.request_handlers[CallToolRequest] = handler
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": self.TOOL, "arguments": {"image": "aGVsbG8="}}}
+        return self.c.post("/mcp", data=json.dumps(body), content_type="application/json", headers=headers)
+
+    def test_mcp_stripe_released_when_the_tool_reports_isError(self):  # CSO 0955Z L3 case 1
+        r = self.mcp({"X-Stripe-Payment-Intent": "pi_ok"}, isError=True)
+        self.assertIn(r.status_code, (200, 202))
+        self.assertNotIn("stripe_redemptions/pi_ok", self.db.docs, "MCP isError must release the redemption")
+        self.assertEqual(self.mcp({"X-Stripe-Payment-Intent": "pi_ok"}).status_code, 200, "usable again")
+
+    def test_mcp_x402_settled_once_after_the_tool(self):  # CSO 0955Z L3 case 2
+        r = self.mcp({"X-PAYMENT": "GOODPERMIT"})
+        self.assertIn(r.status_code, (200, 202), r.get_data(as_text=True)[:200])
+        self.assertEqual(self.settled, ["GOODPERMIT"], "MCP path settles exactly once")
+        self.assertEqual(self.mcp({"X-PAYMENT": "GOODPERMIT"}).status_code, 402, "same permit refused on MCP")
+        self.assertEqual(self.settled, ["GOODPERMIT"])
+
+    def test_mcp_tool_that_raises_releases_stripe(self):  # CSO 0955Z "related, unproven": a raising tool
+        r = self.mcp({"X-Stripe-Payment-Intent": "pi_ok"}, raise_exc=RuntimeError("tool down"))
+        self.assertNotIn("stripe_redemptions/pi_ok", self.db.docs, f"a raising MCP tool must release (status {r.status_code})")
+
+    def test_rest_value_error_releases_stripe(self):  # CSO 0955Z L3 case 3
+        def bad():
+            raise ValueError("image not found")
+        self.dispatch_result = bad
+        r = self.rest({"X-Stripe-Payment-Intent": "pi_ok"})
+        self.assertIn(r.status_code, (400, 404))
+        self.assertNotIn("stripe_redemptions/pi_ok", self.db.docs, "ValueError branch must release")
+        self.dispatch_result = {"status": "success"}
+        self.assertEqual(self.rest({"X-Stripe-Payment-Intent": "pi_ok"}).status_code, 200)
+
     def test_mcp_tools_call_replay_refused(self):
         body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": self.TOOL, "arguments": {"image": "aGVsbG8="}}}
         r1 = self.c.post("/mcp", data=json.dumps(body), content_type="application/json", headers={"X-Stripe-Payment-Intent": "pi_ok"})
