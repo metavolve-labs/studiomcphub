@@ -543,10 +543,14 @@ def mcp_endpoint():
             finally:
                 loop.close()
 
-            # 2026-10-06 audit: an x402 payment is collected only now, after the tool ran (verify != settle)
-            if price and price.gcx_credits > 0 and payment and not getattr(getattr(result, "root", result), "isError", False):
-                from ..payment.settlement import settle_after_success
-                settle_after_success(payment[0], payment[1], tool_name)
+            # 2026-10-06 audit: an x402 payment is collected only now, after the tool ran (verify != settle);
+            # a failed tool releases a Stripe redemption so the payer keeps their call (CSO M2).
+            if price and price.gcx_credits > 0 and payment:
+                from ..payment.settlement import settle_after_success, release_after_failure
+                if getattr(getattr(result, "root", result), "isError", False):
+                    release_after_failure(payment[0], payment[1])
+                else:
+                    settle_after_success(payment[0], payment[1], tool_name)
 
             return Response(
                 json.dumps({
@@ -707,24 +711,15 @@ def check_payment(tool_name: str) -> tuple[str, dict] | None:
             verified_usd = base_usd
 
         if verified_usd is not None:
-            # Post-payment hooks (fire-and-forget)
-            if wallet:
-                try:
-                    from ..payment.agent_tiers import record_spend
-                    record_spend(wallet, verified_usd, tool_name)
-                except Exception as e:
-                    logger.warning(f"record_spend failed: {e}")
-                try:
-                    from ..payment.gcx_credits import ensure_account
-                    ensure_account(wallet)
-                except Exception as e:
-                    logger.warning(f"ensure_account failed: {e}")
-                try:
-                    from ..payment.loyalty import earn_loyalty
-                    earn_loyalty(wallet, price.gcx_credits, tool_name)
-                except Exception as e:
-                    logger.warning(f"earn_loyalty failed: {e}")
-            return ("x402", {"header": x_payment, "wallet": wallet, "tier": tier_info, "amount_usd": verified_usd})
+            # CSO 0541Z M1: a verified permit is reusable until it settles (the nonce is consumed at /settle, which now
+            # runs after the tool), so it is redeemed here, once. Tier spend, account and loyalty moved to
+            # settlement.settle_after_success: they are granted only after the funds are collected.
+            from ..payment.settlement import redeem_x402_permit
+            if not redeem_x402_permit(x_payment, tool_name, verified_usd):
+                logger.warning(f"x402 permit already used for {tool_name}")
+                return None
+            return ("x402", {"header": x_payment, "wallet": wallet, "tier": tier_info, "amount_usd": verified_usd,
+                             "gcx_credits": price.gcx_credits})
 
         logger.warning(f"x402 payment verification failed for {tool_name}")
         return None
@@ -909,9 +904,13 @@ def execute_tool(tool_name: str):
     try:
         from ..tools import dispatch_tool
         result = dispatch_tool(tool_name, params)
-        # 2026-10-06 audit: an x402 payment is collected only now, after the tool ran (verify != settle)
-        from ..payment.settlement import settle_after_success
-        settle_after_success(method, details, tool_name)
+        # 2026-10-06 audit: an x402 payment is collected only now, after the tool ran (verify != settle); an
+        # error-shaped result is a failure (CSO L1) and releases a Stripe redemption instead (CSO M2).
+        from ..payment.settlement import settle_after_success, release_after_failure, result_is_error
+        if result_is_error(result):
+            release_after_failure(method, details)
+        else:
+            settle_after_success(method, details, tool_name)
         return jsonify({
             "tool": tool_name,
             "status": "success",
@@ -924,7 +923,9 @@ def execute_tool(tool_name: str):
         # Return 400 for validation errors, 404 for not-found
         status = 404 if "not found" in error_msg or "not exist" in error_msg else 400
         logger.warning(f"Tool {tool_name} ValueError: {e}")
-        # Refund GCX on validation/not-found errors too
+        # Refund GCX on validation/not-found errors too; a Stripe redemption is released (CSO M2)
+        from ..payment.settlement import release_after_failure
+        release_after_failure(method, details)
         if method == "gcx":
             try:
                 from ..payment.gcx_credits import refund_credits
@@ -943,7 +944,9 @@ def execute_tool(tool_name: str):
         }), status
     except Exception as e:
         logger.error(f"Tool {tool_name} failed: {e}")
-        # Auto-refund GCX credits on tool failure — service not rendered
+        # Auto-refund GCX credits on tool failure — service not rendered; a Stripe redemption is released (CSO M2)
+        from ..payment.settlement import release_after_failure
+        release_after_failure(method, details)
         if method == "gcx":
             try:
                 from ..payment.gcx_credits import refund_credits

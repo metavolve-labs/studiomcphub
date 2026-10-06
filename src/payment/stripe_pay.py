@@ -58,12 +58,18 @@ def verify_payment_intent(payment_intent_id: str, expected_cents: int | None = N
     `tool_name` (the metadata create_payment_intent wrote). Returns the intent, or None. Single use is enforced by
     settlement.redeem_payment_intent, not here."""
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id, expand=["latest_charge"])
     except stripe.error.StripeError as e:
         logger.error("stripe_verify_failed", error=str(e))
         return None
     if intent.status != "succeeded":
         return None
+    # CSO 0541Z L2: a refunded or disputed intent keeps status "succeeded"; refuse it
+    charge = getattr(intent, "latest_charge", None)
+    if charge is not None and not isinstance(charge, str):
+        if getattr(charge, "refunded", False) or int(getattr(charge, "amount_refunded", 0) or 0) > 0 or getattr(charge, "disputed", False):
+            logger.warning("stripe_intent_reversed", intent=payment_intent_id)
+            return None
     if expected_cents is not None and int(intent.amount or 0) < int(expected_cents):
         logger.warning("stripe_intent_underpaid", intent=payment_intent_id, amount=intent.amount, expected=expected_cents)
         return None
