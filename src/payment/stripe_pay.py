@@ -53,11 +53,22 @@ def create_payment_intent(
     }
 
 
-def verify_payment_intent(payment_intent_id: str) -> bool:
-    """Verify a Stripe PaymentIntent has succeeded."""
+def verify_payment_intent(payment_intent_id: str, expected_cents: int | None = None, tool_name: str | None = None):
+    """Verify a Stripe PaymentIntent has succeeded, and (2026-10-06 audit) that it paid at least `expected_cents` for
+    `tool_name` (the metadata create_payment_intent wrote). Returns the intent, or None. Single use is enforced by
+    settlement.redeem_payment_intent, not here."""
     try:
         intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        return intent.status == "succeeded"
     except stripe.error.StripeError as e:
         logger.error("stripe_verify_failed", error=str(e))
-        return False
+        return None
+    if intent.status != "succeeded":
+        return None
+    if expected_cents is not None and int(intent.amount or 0) < int(expected_cents):
+        logger.warning("stripe_intent_underpaid", intent=payment_intent_id, amount=intent.amount, expected=expected_cents)
+        return None
+    meta_tool = (getattr(intent, "metadata", None) or {}).get("tool")
+    if tool_name is not None and meta_tool != tool_name:
+        logger.warning("stripe_intent_tool_mismatch", intent=payment_intent_id, paid_for=meta_tool, called=tool_name)
+        return None
+    return intent

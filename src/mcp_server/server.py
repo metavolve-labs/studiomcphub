@@ -527,6 +527,7 @@ def mcp_endpoint():
 
             # Payment gate: check before dispatching
             price = PRICING.get(tool_name)
+            payment = None
             if price and price.gcx_credits > 0:
                 payment = check_payment(tool_name)
                 if payment is None:
@@ -541,6 +542,11 @@ def mcp_endpoint():
                 )))
             finally:
                 loop.close()
+
+            # 2026-10-06 audit: an x402 payment is collected only now, after the tool ran (verify != settle)
+            if price and price.gcx_credits > 0 and payment and not getattr(getattr(result, "root", result), "isError", False):
+                from ..payment.settlement import settle_after_success
+                settle_after_success(payment[0], payment[1], tool_name)
 
             return Response(
                 json.dumps({
@@ -745,9 +751,12 @@ def check_payment(tool_name: str) -> tuple[str, dict] | None:
     stripe_pi = request.headers.get("X-Stripe-Payment-Intent")
     if stripe_pi:
         from ..payment.stripe_pay import verify_payment_intent
-        if verify_payment_intent(stripe_pi):
-            return ("stripe", {"payment_intent": stripe_pi})
-        logger.warning(f"Stripe PI verification failed for {tool_name}")
+        from ..payment.settlement import redeem_payment_intent
+        # 2026-10-06 audit: the intent must have paid for THIS tool at THIS price, and it buys exactly one call.
+        intent = verify_payment_intent(stripe_pi, price.stripe_cents, tool_name)
+        if intent is not None and redeem_payment_intent(stripe_pi, tool_name, price.stripe_cents):
+            return ("stripe", {"payment_intent": stripe_pi, "amount_cents": int(intent.amount or 0)})
+        logger.warning(f"Stripe PI verification/redemption failed for {tool_name}")
         return None
 
     # No payment found — return 402
@@ -900,6 +909,9 @@ def execute_tool(tool_name: str):
     try:
         from ..tools import dispatch_tool
         result = dispatch_tool(tool_name, params)
+        # 2026-10-06 audit: an x402 payment is collected only now, after the tool ran (verify != settle)
+        from ..payment.settlement import settle_after_success
+        settle_after_success(method, details, tool_name)
         return jsonify({
             "tool": tool_name,
             "status": "success",
