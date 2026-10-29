@@ -61,7 +61,7 @@ PRICING = {
     "list_assets":           ToolPricing(gcx_credits=0),   # FREE  — list stored assets
     "delete_asset":          ToolPricing(gcx_credits=0),   # FREE  — delete stored asset
     # --- Account tools ---
-    "register_wallet":       ToolPricing(gcx_credits=0),   # FREE  — onboarding + 10 GCX welcome bonus
+    "register_wallet":       ToolPricing(gcx_credits=0),   # FREE  — onboarding (welcome bonus: WELCOME_BONUS_GCX)
     "check_balance":         ToolPricing(gcx_credits=0),   # FREE  — account status check
     # --- Meta-tools (Progressive Discovery) ---
     "search_tools":          ToolPricing(gcx_credits=0),   # FREE  — discover tools without loading schemas
@@ -169,3 +169,9 @@ class Config:
 
 
 config = Config()
+
+
+# CSO interim 2026-10-29 (REVISIT #69): a wallet address is an unauthenticated identity,
+# so any 0x+40-hex string minted free GCX. The welcome grant is 0 until register proves
+# ownership (EIP-191 signature). Restore a grant only together with that proof.
+WELCOME_BONUS_GCX = 0

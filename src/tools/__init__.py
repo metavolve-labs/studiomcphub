@@ -477,7 +477,8 @@ def _register_wallet(params: dict) -> dict:
             "message": "Wallet already registered. Your balance is ready to use.",
         }
 
-    welcome_bonus = 10
+    from ..mcp_server.config import WELCOME_BONUS_GCX
+    welcome_bonus = WELCOME_BONUS_GCX  # CSO interim 2026-10-29: 0 (REVISIT #69)
     ref.set({
         "balance": welcome_bonus,
         "created_at": datetime.now(tz.utc),
@@ -486,20 +487,25 @@ def _register_wallet(params: dict) -> dict:
         "source": "mcp_registration",
         "welcome_bonus": welcome_bonus,
     })
-    db.collection("gcx_transactions").add({
-        "user_id": wallet,
-        "type": "credit",
-        "amount": welcome_bonus,
-        "reason": "welcome_bonus",
-        "balance_after": welcome_bonus,
-        "timestamp": datetime.now(tz.utc),
-    })
+    if welcome_bonus > 0:
+        db.collection("gcx_transactions").add({
+            "user_id": wallet,
+            "type": "credit",
+            "amount": welcome_bonus,
+            "reason": "welcome_bonus",
+            "balance_after": welcome_bonus,
+            "timestamp": datetime.now(tz.utc),
+        })
 
     return {
         "status": "created",
         "wallet": wallet,
         "balance": welcome_bonus,
-        "message": f"Welcome! You received {welcome_bonus} free GCX credits (${welcome_bonus * 0.10:.2f} value). Use them to call any tool.",
+        "message": (
+            f"Welcome! You received {welcome_bonus} free GCX credits. Use them to call any tool."
+            if welcome_bonus > 0 else
+            "Wallet registered. Free tools work now; buy GCX packs (GET https://studiomcphub.com/api/credits) for paid tools."
+        ),
         "next_step": "Call enrich_metadata, search_artworks, or any tool — credits deduct automatically when you include 'Authorization: Bearer <wallet>' header.",
     }
 

@@ -555,7 +555,7 @@ TOOL_SCHEMAS = {
     },
     # --- Account tools ---
     "register_wallet": {
-        "description": "Register your wallet to get 10 FREE GCX credits ($1 value). New wallets only — enough to try upscale + enrich. Purchase more via GCX packs. FREE.",
+        "description": "Register your wallet to create a GCX account. Purchase credits via GCX packs. FREE.",
         "inputSchema": {
             "type": "object",
             "properties": {

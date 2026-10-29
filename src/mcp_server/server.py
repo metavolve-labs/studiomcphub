@@ -139,7 +139,7 @@ def mcp_server_card():
     # Auth schemes — x402 only in full profile
     schemes = [
         {"type": "oauth2", "description": "OAuth 2.1 with PKCE (Authorization Code flow)"},
-        {"type": "bearer", "description": "GCX credit token (register wallet for 10 free credits)"},
+        {"type": "bearer", "description": "GCX credit token (wallet address; packs at /api/credits)"},
         {"type": "none", "description": f"Free tools ({len(free_names)} of {len(enabled_tools)} — {', '.join(free_names)}). Rate limited: 10/hr anonymous, 60/hr registered."},
     ]
     if config.tool_profile == "full":
@@ -329,7 +329,7 @@ def openapi_json():
         },
         "components": {
             "securitySchemes": {
-                "bearerAuth": {"type": "http", "scheme": "bearer", "description": "GCX credits — use wallet address as bearer token (register at POST /api/wallet/register for 10 free GCX)"},
+                "bearerAuth": {"type": "http", "scheme": "bearer", "description": "GCX credits — use wallet address as bearer token (register at POST /api/wallet/register, buy packs at /api/credits)"},
                 **({
                     "x402": {"type": "apiKey", "in": "header", "name": "X-PAYMENT", "description": "x402 USDC micropayment on Base L2 — no account needed. Send EIP-712 signed permit. Server returns 402 with exact instructions on first call."},
                 } if config.tool_profile == "full" else {}),
@@ -369,7 +369,7 @@ def pricing_json():
     payment_methods = {
         "gcx_credits": {
             "description": "Pre-purchased credits with volume discounts",
-            "welcome_bonus": 10,
+            "welcome_bonus": WELCOME_BONUS_GCX,
         },
         "stripe": {
             "description": "Credit card via Stripe (packs and subscriptions)",
@@ -781,7 +781,7 @@ def require_payment(tool_name: str):
                 "method": "Bearer token",
                 "credits_required": price.gcx_credits,
                 "header": "Authorization: Bearer 0xYOUR_WALLET",
-                "free_trial": "POST /api/wallet/register → 10 free GCX ($1 value)",
+                "register": "POST /api/wallet/register",
                 "buy_more": "GET /api/credits",
             },
             "2_x402_usdc": {
@@ -998,11 +998,11 @@ def create_stripe_intent():
     if amount_cents < 50:
         return jsonify({
             "error": "amount_below_minimum",
-            "message": f"Stripe requires minimum $0.50 per transaction. This tool costs ${amount_cents/100:.2f}. Consider purchasing GCX credits instead — register your wallet at POST /api/wallet/register for 10 free GCX, or buy packs at /credits.",
+            "message": f"Stripe requires minimum $0.50 per transaction. This tool costs ${amount_cents/100:.2f}. Consider purchasing GCX credits instead — register your wallet at POST /api/wallet/register and buy packs at /credits.",
             "tool": tool_name,
             "amount_usd": amount_cents / 100,
             "alternatives": {
-                "gcx_credits": "POST /api/wallet/register (10 free GCX, then Bearer token auth)",
+                "gcx_credits": "POST /api/wallet/register, buy a GCX pack, then Bearer token auth",
                 "x402": f"Pay ${amount_cents/100:.2f} USDC on Base L2 (no minimum)",
                 "credit_packs": "Buy GCX packs via Stripe at /credits ($5 minimum)",
             },
@@ -1034,8 +1034,8 @@ def credits_info():
     return jsonify({
         "description": "Pre-purchase GCX credits for volume discounts. Credits never expire.",
         "free_trial": {
-            "amount": 10,
-            "value_usd": 1.00,
+            "amount": WELCOME_BONUS_GCX,
+            "value_usd": round(WELCOME_BONUS_GCX * GCX_BASE_RATE, 2),
             "how": "POST /api/wallet/register with your EVM wallet address",
         },
         "packs": GCX_PACKS,
@@ -1093,11 +1093,11 @@ def get_support_ticket(ticket_id: str):
 # Wallet registration & account management
 # ---------------------------------------------------------------------------
 
-WELCOME_BONUS_GCX = 10  # Free trial credits for new wallets ($1.00 value)
+from .config import WELCOME_BONUS_GCX  # CSO interim 2026-10-29: 0 (REVISIT #69)
 
 @app.route("/api/wallet/register", methods=["POST"])
 def register_wallet():
-    """Register a new wallet and receive 10 GCX welcome bonus.
+    """Register a new wallet (welcome bonus: WELCOME_BONUS_GCX, currently 0).
 
     Body: {"wallet": "0x..."} or just the wallet in Authorization header.
     Returns account info with balance, or existing account if already registered.
@@ -1156,15 +1156,16 @@ def register_wallet():
         "welcome_bonus": WELCOME_BONUS_GCX,
     })
 
-    # Log the welcome bonus as a transaction
-    db.collection("gcx_transactions").add({
-        "user_id": wallet_lower,
-        "type": "credit",
-        "amount": WELCOME_BONUS_GCX,
-        "reason": "welcome_bonus",
-        "balance_after": WELCOME_BONUS_GCX,
-        "timestamp": datetime.now(tz.utc),
-    })
+    # Log the welcome bonus as a transaction (none when the grant is 0)
+    if WELCOME_BONUS_GCX > 0:
+        db.collection("gcx_transactions").add({
+            "user_id": wallet_lower,
+            "type": "credit",
+            "amount": WELCOME_BONUS_GCX,
+            "reason": "welcome_bonus",
+            "balance_after": WELCOME_BONUS_GCX,
+            "timestamp": datetime.now(tz.utc),
+        })
 
     logger.info(f"New wallet registered: {wallet_lower} | bonus={WELCOME_BONUS_GCX} GCX")
 
@@ -1173,7 +1174,11 @@ def register_wallet():
         "wallet": wallet_lower,
         "balance": WELCOME_BONUS_GCX,
         "tier": "standard",
-        "message": f"Welcome to StudioMCPHub! You've received {WELCOME_BONUS_GCX} GCX credits ($5.00 value) to try our tools.",
+        "message": (
+            f"Welcome to StudioMCPHub! You've received {WELCOME_BONUS_GCX} GCX credits to try our tools."
+            if WELCOME_BONUS_GCX > 0 else
+            "Welcome to StudioMCPHub! Wallet registered. Free tools work now; buy GCX packs (GET /api/credits) for paid tools."
+        ),
         "how_to_use": {
             "step_1": "Include 'Authorization: Bearer <your-wallet-address>' in your requests",
             "step_2": "Call any tool — credits are deducted automatically",
@@ -1205,7 +1210,7 @@ def wallet_info(wallet_address: str):
             return jsonify({
                 "error": "Wallet not registered",
                 "register_url": "https://studiomcphub.com/api/wallet/register",
-                "message": "Register your wallet to receive 10 free GCX credits.",
+                "message": "Register your wallet to create a GCX account.",
             }), 404
 
     return jsonify({
